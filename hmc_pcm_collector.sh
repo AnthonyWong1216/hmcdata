@@ -1,7 +1,7 @@
 #!/bin/ksh
 
-# IBM HMC PCM Data Collector (ksh, HMC REST API v2)
-# Collects PCM data every 5 seconds using REST API and outputs in CSV format
+# IBM HMC LPAR CPU Data Collector (ksh, HMC REST API v2)
+# Collects LPAR CPU data every 5 seconds using REST API and outputs in CSV format
 
 set -e
 
@@ -36,10 +36,14 @@ fi
 HMC_HOST="${HMC_HOST:-192.168.136.104}"  # Default HMC IP
 HMC_PORT="${HMC_PORT:-12443}"           # Default HMC REST API port
 LOGIN_XML="${LOGIN_XML:-login.xml}"
-OUTPUT_FILE="${OUTPUT_FILE:-pcm_data.csv}"
+OUTPUT_FILE="${OUTPUT_FILE:-lpar_cpu_data.csv}"
 INTERVAL="${COLLECTION_INTERVAL:-5}"     # Data collection interval in seconds
 COOKIE_FILE="cookies.txt"
-AUDIT_MEMENTO="hmc_pcm_collector"
+AUDIT_MEMENTO="hmc_lpar_cpu_collector"
+
+# Hard-coded server and LPAR
+SERVER_NAME="Server-9105-22A-7892A61"
+LPAR_NAME="lpar1"  # Change this to your LPAR name if different
 
 check_curl() {
     if ! whence curl >/dev/null 2>&1; then
@@ -77,82 +81,45 @@ authenticate() {
     echo "$X_API_SESSION"
 }
 
-# Get managed systems (use cookies and X-API-Session)
-get_managed_systems() {
+# Get LPAR CPU data for the specific server and LPAR
+get_lpar_cpu_data() {
     local x_api_session="$1"
-    log "Getting managed systems..."
+    log "Collecting LPAR CPU data for server: ${SERVER_NAME}, LPAR: ${LPAR_NAME}"
     
-    # Try without Accept header first (most compatible)
+    # Try to get LPAR CPU data
     curl -k -b "$COOKIE_FILE" -X GET \
         -H "X-API-Session: ${x_api_session}" \
         -H "X-Audit-Memento: $AUDIT_MEMENTO" \
-        "https://${HMC_HOST}:${HMC_PORT}/rest/api/uom/ManagedSystem" > managed_systems.xml
+        "https://${HMC_HOST}:${HMC_PORT}/rest/api/uom/ManagedSystem/${SERVER_NAME}/LogicalPartition/${LPAR_NAME}/ProcessorRuntime" > lpar_cpu_data.xml
     
     # Check if we got a valid response (not HTML error)
-    if grep -q "Console Internal Error" managed_systems.xml; then
-        log "Trying with generic Accept header..."
+    if grep -q "Console Internal Error" lpar_cpu_data.xml; then
+        log "Trying with generic Accept header for LPAR CPU data..."
         curl -k -b "$COOKIE_FILE" -X GET \
             -H "X-API-Session: ${x_api_session}" \
             -H "Accept: application/vnd.ibm.powervm.web+xml" \
             -H "X-Audit-Memento: $AUDIT_MEMENTO" \
-            "https://${HMC_HOST}:${HMC_PORT}/rest/api/uom/ManagedSystem" > managed_systems.xml
+            "https://${HMC_HOST}:${HMC_PORT}/rest/api/uom/ManagedSystem/${SERVER_NAME}/LogicalPartition/${LPAR_NAME}/ProcessorRuntime" > lpar_cpu_data.xml
     fi
     
-    # Check again for errors
-    if grep -q "Console Internal Error" managed_systems.xml; then
-        log "Trying base endpoint..."
-        curl -k -b "$COOKIE_FILE" -X GET \
-            -H "X-API-Session: ${x_api_session}" \
-            -H "X-Audit-Memento: $AUDIT_MEMENTO" \
-            "https://${HMC_HOST}:${HMC_PORT}/rest/api/uom" > managed_systems.xml
-    fi
-    
-    # Extract system IDs using sed
-    sed -n 's/.*href="[^\"]*ManagedSystem\/\([^\"]*\)".*/\1/p' managed_systems.xml
+    cat lpar_cpu_data.xml
 }
 
-# Get PCM data for a system (use cookies and X-API-Session)
-get_pcm_data() {
-    local x_api_session="$1"
-    local system_id="$2"
-    log "Collecting PCM data for system: ${system_id}"
-    
-    # Try without Accept header first (most compatible)
-    curl -k -b "$COOKIE_FILE" -X GET \
-        -H "X-API-Session: ${x_api_session}" \
-        -H "X-Audit-Memento: $AUDIT_MEMENTO" \
-        "https://${HMC_HOST}:${HMC_PORT}/rest/api/uom/ManagedSystem/${system_id}/PerformanceAndCapacityMonitoring" > pcm_data.xml
-    
-    # Check if we got a valid response (not HTML error)
-    if grep -q "Console Internal Error" pcm_data.xml; then
-        log "Trying with generic Accept header for PCM data..."
-        curl -k -b "$COOKIE_FILE" -X GET \
-            -H "X-API-Session: ${x_api_session}" \
-            -H "Accept: application/vnd.ibm.powervm.web+xml" \
-            -H "X-Audit-Memento: $AUDIT_MEMENTO" \
-            "https://${HMC_HOST}:${HMC_PORT}/rest/api/uom/ManagedSystem/${system_id}/PerformanceAndCapacityMonitoring" > pcm_data.xml
-    fi
-    
-    cat pcm_data.xml
-}
-
-# Parse PCM data and convert to CSV
-parse_pcm_to_csv() {
-    local pcm_data_file="$1"
-    local system_id="$2"
+# Parse LPAR CPU data and convert to CSV
+parse_lpar_cpu_to_csv() {
+    local cpu_data_file="$1"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    # Extract metrics
-    CPU_UTIL=$(extract_xml_tag 'cpuUtilization' "$pcm_data_file"); if [ -z "$CPU_UTIL" ]; then CPU_UTIL="N/A"; fi
-    MEM_UTIL=$(extract_xml_tag 'memoryUtilization' "$pcm_data_file"); if [ -z "$MEM_UTIL" ]; then MEM_UTIL="N/A"; fi
-    NET_UTIL=$(extract_xml_tag 'networkUtilization' "$pcm_data_file"); if [ -z "$NET_UTIL" ]; then NET_UTIL="N/A"; fi
-    STORAGE_UTIL=$(extract_xml_tag 'storageUtilization' "$pcm_data_file"); if [ -z "$STORAGE_UTIL" ]; then STORAGE_UTIL="N/A"; fi
-    POWER=$(extract_xml_tag 'powerConsumption' "$pcm_data_file"); if [ -z "$POWER" ]; then POWER="N/A"; fi
-    TEMP=$(extract_xml_tag 'temperature' "$pcm_data_file"); if [ -z "$TEMP" ]; then TEMP="N/A"; fi
-    echo "${timestamp},${system_id},${CPU_UTIL},${MEM_UTIL},${NET_UTIL},${STORAGE_UTIL},${POWER},${TEMP}"
+    
+    # Extract CPU metrics
+    CPU_UTIL=$(extract_xml_tag 'cpuUtilization' "$cpu_data_file"); if [ -z "$CPU_UTIL" ]; then CPU_UTIL="N/A"; fi
+    ENTITLED_CPU=$(extract_xml_tag 'entitledProcUnits' "$cpu_data_file"); if [ -z "$ENTITLED_CPU" ]; then ENTITLED_CPU="N/A"; fi
+    CONFIGURED_CPU=$(extract_xml_tag 'configuredProcUnits' "$cpu_data_file"); if [ -z "$CONFIGURED_CPU" ]; then CONFIGURED_CPU="N/A"; fi
+    
+    echo "${timestamp},${SERVER_NAME},${LPAR_NAME},${CPU_UTIL},${ENTITLED_CPU},${CONFIGURED_CPU}"
 }
 
 create_csv_header() {
-    echo "Timestamp,System_ID,CPU_Utilization,Memory_Utilization,Network_Utilization,Storage_Utilization,Power_Consumption,Temperature" > "$OUTPUT_FILE"
+    echo "Timestamp,Server_Name,LPAR_Name,CPU_Utilization,Entitled_CPU,Configured_CPU" > "$OUTPUT_FILE"
     log "CSV file created: ${OUTPUT_FILE}"
 }
 
@@ -167,7 +134,7 @@ cleanup_session() {
             -H "X-Audit-Memento: $AUDIT_MEMENTO" \
             "https://${HMC_HOST}:${HMC_PORT}/rest/api/web/Logoff" > /dev/null
     fi
-    rm -f "$COOKIE_FILE" logon_response.xml managed_systems.xml pcm_data.xml
+    rm -f "$COOKIE_FILE" logon_response.xml lpar_cpu_data.xml
 }
 
 cleanup() {
@@ -177,33 +144,34 @@ cleanup() {
 }
 
 main() {
-    log "Starting IBM HMC PCM Data Collector"
+    log "Starting IBM HMC LPAR CPU Data Collector"
     log "HMC Host: ${HMC_HOST}:${HMC_PORT}"
+    log "Server: ${SERVER_NAME}"
+    log "LPAR: ${LPAR_NAME}"
     log "Collection interval: ${INTERVAL} seconds"
     log "Output file: ${OUTPUT_FILE}"
+    
     check_curl
     if [ ! -f "$LOGIN_XML" ]; then
         error "Login XML file not found: ${LOGIN_XML}"
         exit 1
     fi
+    
     create_csv_header
     trap cleanup INT TERM
+    
     X_API_SESSION=$(authenticate)
-    SYSTEMS=$(get_managed_systems "$X_API_SESSION")
-    if [ -z "$SYSTEMS" ]; then
-        error "No managed systems found"
-        cleanup_session "$X_API_SESSION"
-        exit 1
-    fi
-    log "Found managed systems: $(echo "$SYSTEMS" | tr '\n' ' ')"
+    
+    log "Starting data collection for ${SERVER_NAME}/${LPAR_NAME}..."
+    
     while true; do
-        log "Collecting PCM data..."
-        for system in $SYSTEMS; do
-            get_pcm_data "$X_API_SESSION" "$system" > pcm_data.xml
-            CSV_LINE=$(parse_pcm_to_csv pcm_data.xml "$system")
-            echo "$CSV_LINE" >> "$OUTPUT_FILE"
-            log "Data collected for system: ${system}"
-        done
+        log "Collecting LPAR CPU data..."
+        
+        get_lpar_cpu_data "$X_API_SESSION" > lpar_cpu_data.xml
+        CSV_LINE=$(parse_lpar_cpu_to_csv lpar_cpu_data.xml)
+        echo "$CSV_LINE" >> "$OUTPUT_FILE"
+        log "Data collected for ${SERVER_NAME}/${LPAR_NAME}"
+        
         log "Waiting ${INTERVAL} seconds before next collection..."
         sleep "$INTERVAL"
     done
