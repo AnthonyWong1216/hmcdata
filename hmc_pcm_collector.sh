@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/ksh
 
 # IBM HMC PCM Data Collector
 # Collects PCM data every 5 seconds using REST API and outputs in CSV format
@@ -20,23 +20,30 @@ NC='\033[0m' # No Color
 
 # Function to log messages
 log() {
-    echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"
+    print -u2 "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"
 }
 
 error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
+    print -u2 "${RED}[ERROR]${NC} $1"
 }
 
 warn() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    print -u2 "${YELLOW}[WARNING]${NC} $1"
 }
 
 # Function to check if curl is available
 check_curl() {
-    if ! command -v curl &> /dev/null; then
+    if ! whence curl >/dev/null 2>&1; then
         error "curl is not installed. Please install curl first."
         exit 1
     fi
+}
+
+# Function to extract value using sed (ksh compatible)
+extract_value() {
+    local pattern="$1"
+    local data="$2"
+    echo "$data" | sed -n "s/.*$pattern//p" | sed 's/["'"'"'"]//g'
 }
 
 # Function to authenticate with HMC
@@ -55,12 +62,12 @@ authenticate() {
         exit 1
     fi
     
-    # Extract session ID from response
-    SESSION_ID=$(echo "$SESSION_RESPONSE" | grep -o 'sessionID="[^"]*"' | cut -d'"' -f2)
+    # Extract session ID from response using sed
+    SESSION_ID=$(extract_value 'sessionID="' "$SESSION_RESPONSE")
     
     if [ -z "$SESSION_ID" ]; then
         error "Authentication failed. Check credentials in ${LOGIN_XML}"
-        echo "Response: $SESSION_RESPONSE"
+        print "Response: $SESSION_RESPONSE"
         exit 1
     fi
     
@@ -84,8 +91,8 @@ get_managed_systems() {
         return 1
     fi
     
-    # Extract system IDs
-    echo "$SYSTEMS_RESPONSE" | grep -o 'href="[^"]*ManagedSystem[^"]*"' | cut -d'"' -f2 | sed 's/.*\/\([^\/]*\)$/\1/'
+    # Extract system IDs using sed
+    echo "$SYSTEMS_RESPONSE" | sed -n 's/.*href="[^"]*ManagedSystem\/\([^"]*\)".*/\1/p'
 }
 
 # Function to get PCM data for a system
@@ -114,24 +121,30 @@ parse_pcm_to_csv() {
     local system_id="$2"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
-    # Extract various PCM metrics using XML parsing
+    # Extract various PCM metrics using sed
     # CPU utilization
-    CPU_UTIL=$(echo "$pcm_data" | grep -o 'cpuUtilization="[^"]*"' | cut -d'"' -f2 || echo "N/A")
+    CPU_UTIL=$(extract_value 'cpuUtilization="' "$pcm_data")
+    if [ -z "$CPU_UTIL" ]; then CPU_UTIL="N/A"; fi
     
     # Memory utilization
-    MEM_UTIL=$(echo "$pcm_data" | grep -o 'memoryUtilization="[^"]*"' | cut -d'"' -f2 || echo "N/A")
+    MEM_UTIL=$(extract_value 'memoryUtilization="' "$pcm_data")
+    if [ -z "$MEM_UTIL" ]; then MEM_UTIL="N/A"; fi
     
     # Network utilization
-    NET_UTIL=$(echo "$pcm_data" | grep -o 'networkUtilization="[^"]*"' | cut -d'"' -f2 || echo "N/A")
+    NET_UTIL=$(extract_value 'networkUtilization="' "$pcm_data")
+    if [ -z "$NET_UTIL" ]; then NET_UTIL="N/A"; fi
     
     # Storage utilization
-    STORAGE_UTIL=$(echo "$pcm_data" | grep -o 'storageUtilization="[^"]*"' | cut -d'"' -f2 || echo "N/A")
+    STORAGE_UTIL=$(extract_value 'storageUtilization="' "$pcm_data")
+    if [ -z "$STORAGE_UTIL" ]; then STORAGE_UTIL="N/A"; fi
     
     # Power consumption
-    POWER=$(echo "$pcm_data" | grep -o 'powerConsumption="[^"]*"' | cut -d'"' -f2 || echo "N/A")
+    POWER=$(extract_value 'powerConsumption="' "$pcm_data")
+    if [ -z "$POWER" ]; then POWER="N/A"; fi
     
     # Temperature
-    TEMP=$(echo "$pcm_data" | grep -o 'temperature="[^"]*"' | cut -d'"' -f2 || echo "N/A")
+    TEMP=$(extract_value 'temperature="' "$pcm_data")
+    if [ -z "$TEMP" ]; then TEMP="N/A"; fi
     
     # Output CSV format
     echo "${timestamp},${system_id},${CPU_UTIL},${MEM_UTIL},${NET_UTIL},${STORAGE_UTIL},${POWER},${TEMP}"
@@ -182,7 +195,7 @@ main() {
     create_csv_header
     
     # Set up signal handling
-    trap cleanup SIGINT SIGTERM
+    trap cleanup INT TERM
     
     # Authenticate
     SESSION_ID=$(authenticate)
@@ -220,6 +233,6 @@ main() {
 }
 
 # Check if script is run directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+if [[ "${.sh.file}" == "${0}" ]]; then
     main "$@"
 fi 
