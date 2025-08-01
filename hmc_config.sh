@@ -4,8 +4,8 @@
 # Source this file to set configuration variables
 
 # HMC Connection Settings
-export HMC_HOST="192.168.1.100"    # Change to your HMC IP address
-export HMC_PORT="12443"             # Default HMC REST API port (HTTPS)
+export HMC_HOST="192.168.136.104"    # HMC IP address
+export HMC_PORT="12443"             # HMC REST API port (HTTPS)
 export HMC_USERNAME="hscroot"       # HMC username
 export HMC_PASSWORD="abcd1234"      # HMC password (from login.xml)
 

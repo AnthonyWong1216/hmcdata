@@ -5,21 +5,13 @@
 
 set -e
 
-# Configuration
-HMC_HOST="192.168.136.104"  # Change this to your HMC IP
-HMC_PORT="12443"           # Default HMC REST API port
-LOGIN_XML="login.xml"
-OUTPUT_FILE="pcm_data.csv"
-INTERVAL=5                  # Data collection interval in seconds
-COOKIE_FILE="cookies.txt"
-AUDIT_MEMENTO="hmc_pcm_collector"
-
 # Colors for output
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Function definitions
 log() {
     print -u2 "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"
 }
@@ -31,6 +23,23 @@ error() {
 warn() {
     print -u2 "${YELLOW}[WARNING]${NC} $1"
 }
+
+# Source configuration file if it exists
+if [ -f "hmc_config.sh" ]; then
+    . ./hmc_config.sh
+    log "Configuration loaded from hmc_config.sh"
+else
+    log "Using default configuration (hmc_config.sh not found)"
+fi
+
+# Configuration (use config file values or defaults)
+HMC_HOST="${HMC_HOST:-192.168.136.104}"  # Default HMC IP
+HMC_PORT="${HMC_PORT:-12443}"           # Default HMC REST API port
+LOGIN_XML="${LOGIN_XML:-login.xml}"
+OUTPUT_FILE="${OUTPUT_FILE:-pcm_data.csv}"
+INTERVAL="${COLLECTION_INTERVAL:-5}"     # Data collection interval in seconds
+COOKIE_FILE="cookies.txt"
+AUDIT_MEMENTO="hmc_pcm_collector"
 
 check_curl() {
     if ! whence curl >/dev/null 2>&1; then
@@ -72,11 +81,32 @@ authenticate() {
 get_managed_systems() {
     local x_api_session="$1"
     log "Getting managed systems..."
+    
+    # Try without Accept header first (most compatible)
     curl -k -b "$COOKIE_FILE" -X GET \
         -H "X-API-Session: ${x_api_session}" \
-        -H "Accept: application/vnd.ibm.powervm.web+xml; type=ManagedSystemList" \
         -H "X-Audit-Memento: $AUDIT_MEMENTO" \
         "https://${HMC_HOST}:${HMC_PORT}/rest/api/uom/ManagedSystem" > managed_systems.xml
+    
+    # Check if we got a valid response (not HTML error)
+    if grep -q "Console Internal Error" managed_systems.xml; then
+        log "Trying with generic Accept header..."
+        curl -k -b "$COOKIE_FILE" -X GET \
+            -H "X-API-Session: ${x_api_session}" \
+            -H "Accept: application/vnd.ibm.powervm.web+xml" \
+            -H "X-Audit-Memento: $AUDIT_MEMENTO" \
+            "https://${HMC_HOST}:${HMC_PORT}/rest/api/uom/ManagedSystem" > managed_systems.xml
+    fi
+    
+    # Check again for errors
+    if grep -q "Console Internal Error" managed_systems.xml; then
+        log "Trying base endpoint..."
+        curl -k -b "$COOKIE_FILE" -X GET \
+            -H "X-API-Session: ${x_api_session}" \
+            -H "X-Audit-Memento: $AUDIT_MEMENTO" \
+            "https://${HMC_HOST}:${HMC_PORT}/rest/api/uom" > managed_systems.xml
+    fi
+    
     # Extract system IDs using sed
     sed -n 's/.*href="[^\"]*ManagedSystem\/\([^\"]*\)".*/\1/p' managed_systems.xml
 }
@@ -86,11 +116,23 @@ get_pcm_data() {
     local x_api_session="$1"
     local system_id="$2"
     log "Collecting PCM data for system: ${system_id}"
+    
+    # Try without Accept header first (most compatible)
     curl -k -b "$COOKIE_FILE" -X GET \
         -H "X-API-Session: ${x_api_session}" \
-        -H "Accept: application/vnd.ibm.powervm.web+xml; type=PerformanceAndCapacityMonitoring" \
         -H "X-Audit-Memento: $AUDIT_MEMENTO" \
         "https://${HMC_HOST}:${HMC_PORT}/rest/api/uom/ManagedSystem/${system_id}/PerformanceAndCapacityMonitoring" > pcm_data.xml
+    
+    # Check if we got a valid response (not HTML error)
+    if grep -q "Console Internal Error" pcm_data.xml; then
+        log "Trying with generic Accept header for PCM data..."
+        curl -k -b "$COOKIE_FILE" -X GET \
+            -H "X-API-Session: ${x_api_session}" \
+            -H "Accept: application/vnd.ibm.powervm.web+xml" \
+            -H "X-Audit-Memento: $AUDIT_MEMENTO" \
+            "https://${HMC_HOST}:${HMC_PORT}/rest/api/uom/ManagedSystem/${system_id}/PerformanceAndCapacityMonitoring" > pcm_data.xml
+    fi
+    
     cat pcm_data.xml
 }
 
