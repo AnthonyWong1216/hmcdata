@@ -232,7 +232,4 @@ main() {
     done
 }
 
-# Check if script is run directly
-if [[ "${.sh.file}" == "${0}" ]]; then
-    main "$@"
-fi 
+main "$@" 
